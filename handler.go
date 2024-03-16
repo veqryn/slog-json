@@ -78,7 +78,7 @@ type HandlerOptions struct {
 	// 	jsontext.AllowDuplicateNames(true),
 	// 	jsontext.AllowInvalidUTF8(true),
 	// 	jsontext.EscapeForHTML(false),
-	// 	jsontext.EscapeForJS(false),
+	// 	jsontext.EscapeForJS(true),
 	// 	jsontext.Multiline(false),
 	// 	jsontext.SpaceAfterColon(false),
 	// 	jsontext.SpaceAfterComma(true),
@@ -118,7 +118,7 @@ func NewHandler(w io.Writer, opts *HandlerOptions) *Handler {
 			jsontext.AllowDuplicateNames(true),
 			jsontext.AllowInvalidUTF8(true),
 			jsontext.EscapeForHTML(false),
-			jsontext.EscapeForJS(false),
+			jsontext.EscapeForJS(true),
 			jsontext.Multiline(false),
 			jsontext.SpaceAfterColon(false),
 			jsontext.SpaceAfterComma(true),
@@ -609,8 +609,9 @@ func appendJSONValue(s *handleState, v slog.Value) error {
 	case slog.KindBool:
 		*s.buf = strconv.AppendBool(*s.buf, v.Bool())
 	case slog.KindDuration:
-		// Do what json.Marshal does.
-		*s.buf = strconv.AppendInt(*s.buf, int64(v.Duration()), 10)
+		// json v2 will return a duration like 1m5s,
+		// json v1 will return the number of nanoseconds
+		s.appendString(v.Duration().String())
 	case slog.KindTime:
 		appendJSONTime(s, v.Time())
 	case slog.KindAny:
@@ -643,6 +644,7 @@ func appendJSONMarshal(buf *buffer.Buffer, v any, opts jsontext.Options) error {
 //
 // Modified from encoding/json/encode.go:encodeState.string,
 // with escapeHTML set to false.
+// TODO: align with json v2
 func appendEscapedJSONString(buf []byte, s string) []byte {
 	char := func(b byte) { buf = append(buf, b) }
 	str := func(s string) { buf = append(buf, s...) }
@@ -722,6 +724,7 @@ const hex = "0123456789abcdef"
 //
 // All values are true except for the ASCII control characters (0-31), the
 // double quote ("), and the backslash character ("\").
+// TODO: align with json v2
 var safeSet = [utf8.RuneSelf]bool{
 	' ':      true,
 	'!':      true,

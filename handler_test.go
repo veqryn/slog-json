@@ -3,9 +3,12 @@ package slogjson
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"math"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -14,7 +17,15 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
+	"github.com/veqryn/slog-json/internal/buffer"
 )
+
+// This code is mostly borrowed then lightly modified from:
+// https://github.com/golang/go/blob/68d3a9e417344c11426f158c7a6f3197a0890ff1/src/log/slog/handler_test.go
+// https://github.com/golang/go/blob/68d3a9e417344c11426f158c7a6f3197a0890ff1/src/log/slog/json_handler_test.go
 
 var testTime = time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
 
@@ -267,7 +278,7 @@ func TestHandler(t *testing.T) {
 		{
 			name:     "json.RawMessage",
 			replace:  removeKeys(slog.TimeKey, slog.LevelKey),
-			attrs:    []slog.Attr{slog.Any("bs", json.RawMessage([]byte("1234")))},
+			attrs:    []slog.Attr{slog.Any("bs", jsontext.Value([]byte("1234")))},
 			wantJSON: `{"msg":"message", "bs":1234}`,
 		},
 		{
@@ -549,4 +560,269 @@ func TestReplaceAttrGroups(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("\ngot  %v\nwant %v", got, want)
 	}
+}
+
+const rfc3339Millis = "2006-01-02T15:04:05.000Z07:00"
+
+func TestJSONHandler(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		opts HandlerOptions
+		want string
+	}{
+		{
+			"none",
+			HandlerOptions{},
+			`{"time":"2000-01-02T03:04:05Z", "level":"INFO", "msg":"m", "a":1, "m":{"b":2}}`,
+		},
+		{
+			"replace",
+			HandlerOptions{ReplaceAttr: upperCaseKey},
+			`{"TIME":"2000-01-02T03:04:05Z", "LEVEL":"INFO", "MSG":"m", "A":1, "M":{"b":2}}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			h := NewHandler(&buf, &test.opts)
+			r := slog.NewRecord(testTime, slog.LevelInfo, "m", 0)
+			r.AddAttrs(slog.Int("a", 1), slog.Any("m", map[string]int{"b": 2}))
+			if err := h.Handle(context.Background(), r); err != nil {
+				t.Fatal(err)
+			}
+			got := strings.TrimSuffix(buf.String(), "\n")
+			if got != test.want {
+				t.Errorf("\ngot  %s\nwant %s", got, test.want)
+			}
+		})
+	}
+}
+
+// for testing json.Marshaler
+type jsonMarshaler struct {
+	s string
+}
+
+func (j jsonMarshaler) String() string { return j.s } // should be ignored
+
+func (j jsonMarshaler) MarshalJSON() ([]byte, error) {
+	if j.s == "" {
+		return nil, errors.New("json: empty string")
+	}
+	return []byte(fmt.Sprintf(`[%q]`, j.s)), nil
+}
+
+type jsonMarshalerError struct {
+	jsonMarshaler
+}
+
+func (jsonMarshalerError) Error() string { return "oops" }
+
+func TestAppendJSONValue(t *testing.T) {
+	// jsonAppendAttrValue should always agree with json.Marshal.
+	for i, value := range []any{
+		"hello\r\n\t\a",
+		`"[{escape}]"`,
+		"<escapeHTML&>",
+		// \u2028\u2029 is an edge case in JavaScript vs JSON.
+		"\u03B8\u2028\u2029\uFFFF",
+		// \xF6 is an incomplete encoding.
+		// "\xF6",
+		`-123`,
+		int64(-9_200_123_456_789_123_456),
+		uint64(9_200_123_456_789_123_456),
+		-12.75,
+		1.23e-9,
+		false,
+		time.Minute,
+		testTime,
+		jsonMarshaler{"xyz"},
+		jsonMarshalerError{jsonMarshaler{"pqr"}},
+		slog.LevelWarn,
+	} {
+		got := jsonValueString(slog.AnyValue(value))
+		want, err := marshalJSON(value)
+		if err != nil {
+			t.Fatal(i, err)
+		}
+		if got != want {
+			t.Errorf("%d: %v: got %s, want %s", i, value, got, want)
+		}
+	}
+}
+
+func marshalJSON(x any) (string, error) {
+	var buf bytes.Buffer
+	err := json.MarshalWrite(&buf, x, jsontext.AllowInvalidUTF8(true), jsontext.EscapeForJS(true))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(buf.String()), nil
+}
+
+func TestJSONAppendAttrValueSpecial(t *testing.T) {
+	// Attr values that render differently from json.Marshal.
+	for _, test := range []struct {
+		value any
+		want  string
+	}{
+		{math.NaN(), `"!ERROR:json: cannot marshal Go value of type float64: invalid value: NaN"`},
+		{math.Inf(+1), `"!ERROR:json: cannot marshal Go value of type float64: invalid value: +Inf"`},
+		{math.Inf(-1), `"!ERROR:json: cannot marshal Go value of type float64: invalid value: -Inf"`},
+		{io.EOF, `"EOF"`},
+	} {
+		got := jsonValueString(slog.AnyValue(test.value))
+		if got != test.want {
+			t.Errorf("%v: got %s, want %s", test.value, got, test.want)
+		}
+	}
+}
+
+func jsonValueString(v slog.Value) string {
+	var buf []byte
+	s := &handleState{h: &Handler{}, buf: (*buffer.Buffer)(&buf)}
+	if err := appendJSONValue(s, v); err != nil {
+		s.appendError(err)
+	}
+	return string(buf)
+}
+
+func BenchmarkJSONHandler(b *testing.B) {
+	for _, bench := range []struct {
+		name string
+		opts HandlerOptions
+	}{
+		{"defaults", HandlerOptions{}},
+		{"time format", HandlerOptions{
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				v := a.Value
+				if v.Kind() == slog.KindTime {
+					return slog.String(a.Key, v.Time().Format(rfc3339Millis))
+				}
+				if a.Key == "level" {
+					return slog.Attr{"severity", a.Value}
+				}
+				return a
+			},
+		}},
+		{"time unix", HandlerOptions{
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				v := a.Value
+				if v.Kind() == slog.KindTime {
+					return slog.Int64(a.Key, v.Time().UnixNano())
+				}
+				if a.Key == "level" {
+					return slog.Attr{"severity", a.Value}
+				}
+				return a
+			},
+		}},
+	} {
+		b.Run(bench.name, func(b *testing.B) {
+			ctx := context.Background()
+			l := slog.New(NewHandler(io.Discard, &bench.opts)).With(
+				slog.String("program", "my-test-program"),
+				slog.String("package", "log/slog"),
+				slog.String("traceID", "2039232309232309"),
+				slog.String("URL", "https://pkg.go.dev/golang.org/x/log/slog"))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				l.LogAttrs(ctx, slog.LevelInfo, "this is a typical log message",
+					slog.String("module", "github.com/google/go-cmp"),
+					slog.String("version", "v1.23.4"),
+					slog.Int("count", 23),
+					slog.Int("number", 123456),
+				)
+			}
+		})
+	}
+}
+
+func BenchmarkPreformatting(b *testing.B) {
+	type req struct {
+		Method  string
+		URL     string
+		TraceID string
+		Addr    string
+	}
+
+	structAttrs := []any{
+		slog.String("program", "my-test-program"),
+		slog.String("package", "log/slog"),
+		slog.Any("request", &req{
+			Method:  "GET",
+			URL:     "https://pkg.go.dev/golang.org/x/log/slog",
+			TraceID: "2039232309232309",
+			Addr:    "127.0.0.1:8080",
+		}),
+	}
+
+	outFile, err := os.Create(filepath.Join(b.TempDir(), "bench.log"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() {
+		if err := outFile.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}()
+
+	for _, bench := range []struct {
+		name  string
+		wc    io.Writer
+		attrs []any
+	}{
+		{"separate", io.Discard, []any{
+			slog.String("program", "my-test-program"),
+			slog.String("package", "log/slog"),
+			slog.String("method", "GET"),
+			slog.String("URL", "https://pkg.go.dev/golang.org/x/log/slog"),
+			slog.String("traceID", "2039232309232309"),
+			slog.String("addr", "127.0.0.1:8080"),
+		}},
+		{"struct", io.Discard, structAttrs},
+		{"struct file", outFile, structAttrs},
+	} {
+		ctx := context.Background()
+		b.Run(bench.name, func(b *testing.B) {
+			l := slog.New(NewHandler(bench.wc, nil)).With(bench.attrs...)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				l.LogAttrs(ctx, slog.LevelInfo, "this is a typical log message",
+					slog.String("module", "github.com/google/go-cmp"),
+					slog.String("version", "v1.23.4"),
+					slog.Int("count", 23),
+					slog.Int("number", 123456),
+				)
+			}
+		})
+	}
+}
+
+func BenchmarkJSONEncoding(b *testing.B) {
+	value := 3.14
+	buf := buffer.New()
+	defer buf.Free()
+	b.Run("json.Marshal", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			by, err := json.Marshal(value)
+			if err != nil {
+				b.Fatal(err)
+			}
+			buf.Write(by)
+			*buf = (*buf)[:0]
+		}
+	})
+	b.Run("Encoder.Encode", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if err := json.MarshalWrite(buf, value); err != nil {
+				b.Fatal(err)
+			}
+			*buf = (*buf)[:0]
+		}
+	})
+	_ = buf
 }
