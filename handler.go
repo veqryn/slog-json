@@ -325,3 +325,245 @@ func recordSource(r slog.Record) *slog.Source {
 		Line:     f.Line,
 	}
 }
+
+func (s *handleState) appendNonBuiltIns(r slog.Record) {
+	// preformatted Attrs
+	if pfa := s.h.preformattedAttrs; len(pfa) > 0 {
+		s.buf.WriteString(s.sep)
+		s.buf.Write(pfa)
+		s.sep = s.h.attrSep
+		if pfa[len(pfa)-1] == '{' {
+			s.sep = ""
+		}
+	}
+	// Attrs in Record -- unlike the built-in ones, they are in groups started
+	// from WithGroup.
+	// If the record has no Attrs, don't output any groups.
+	nOpenGroups := s.h.nOpenGroups
+	if r.NumAttrs() > 0 {
+		// The group may turn out to be empty even though it has attrs (for
+		// example, ReplaceAttr may delete all the attrs).
+		// So remember where we are in the buffer, to restore the position
+		// later if necessary.
+		pos := s.buf.Len()
+		s.openGroups()
+		nOpenGroups = len(s.h.groups)
+		empty := true
+		r.Attrs(func(a slog.Attr) bool {
+			if s.appendAttr(a) {
+				empty = false
+			}
+			return true
+		})
+		if empty {
+			s.buf.SetLen(pos)
+			nOpenGroups = s.h.nOpenGroups
+		}
+	}
+
+	// Close all open groups.
+	for range s.h.groups[:nOpenGroups] {
+		s.buf.WriteByte('}')
+	}
+	// Close the top-level object.
+	s.buf.WriteByte('}')
+}
+
+// handleState holds state for a single call to Handler.handle.
+// The initial value of sep determines whether to emit a separator
+// before the next key, after which it stays true.
+type handleState struct {
+	h       *Handler
+	buf     *buffer.Buffer
+	freeBuf bool      // should buf be freed?
+	sep     string    // separator to write before next key
+	groups  *[]string // pool-allocated slice of active groups, for ReplaceAttr
+}
+
+var groupPool = sync.Pool{New: func() any {
+	s := make([]string, 0, 10)
+	return &s
+}}
+
+func (h *Handler) newHandleState(buf *buffer.Buffer, freeBuf bool, sep string) handleState {
+	s := handleState{
+		h:       h,
+		buf:     buf,
+		freeBuf: freeBuf,
+		sep:     sep,
+	}
+	if h.opts.ReplaceAttr != nil {
+		s.groups = groupPool.Get().(*[]string)
+		*s.groups = append(*s.groups, h.groups[:h.nOpenGroups]...)
+	}
+	return s
+}
+
+func (s *handleState) free() {
+	if s.freeBuf {
+		s.buf.Free()
+	}
+	if gs := s.groups; gs != nil {
+		*gs = (*gs)[:0]
+		groupPool.Put(gs)
+	}
+}
+
+func (s *handleState) openGroups() {
+	for _, n := range s.h.groups[s.h.nOpenGroups:] {
+		s.openGroup(n)
+	}
+}
+
+// openGroup starts a new group of attributes
+// with the given name.
+func (s *handleState) openGroup(name string) {
+	s.appendKey(name)
+	s.buf.WriteByte('{')
+	s.sep = ""
+
+	// Collect group names for ReplaceAttr.
+	if s.groups != nil {
+		*s.groups = append(*s.groups, name)
+	}
+}
+
+// closeGroup ends the group with the given name.
+func (s *handleState) closeGroup(name string) {
+	s.buf.WriteByte('}')
+
+	s.sep = s.h.attrSep
+	if s.groups != nil {
+		*s.groups = (*s.groups)[:len(*s.groups)-1]
+	}
+}
+
+// appendAttrs appends the slice of Attrs.
+// It reports whether something was appended.
+func (s *handleState) appendAttrs(as []slog.Attr) bool {
+	nonEmpty := false
+	for _, a := range as {
+		if s.appendAttr(a) {
+			nonEmpty = true
+		}
+	}
+	return nonEmpty
+}
+
+// isEmpty reports whether a has an empty key and a nil value.
+// That can be written as Attr{} or Any("", nil).
+func attrIsEmpty(a slog.Attr) bool {
+	return a.Key == "" && a.Value.Equal(slog.Value{})
+}
+
+// group returns the non-zero fields of s as a slice of attrs.
+// It is similar to a LogValue method, but we don't want Source
+// to implement LogValuer because it would be resolved before
+// the ReplaceAttr function was called.
+func sourceGroup(s *slog.Source) slog.Value {
+	var as []slog.Attr
+	if s.Function != "" {
+		as = append(as, slog.String("function", s.Function))
+	}
+	if s.File != "" {
+		as = append(as, slog.String("file", s.File))
+	}
+	if s.Line != 0 {
+		as = append(as, slog.Int("line", s.Line))
+	}
+	return slog.GroupValue(as...)
+}
+
+// appendAttr appends the Attr's key and value.
+// It handles replacement and checking for an empty key.
+// It reports whether something was appended.
+func (s *handleState) appendAttr(a slog.Attr) bool {
+	a.Value = a.Value.Resolve()
+	if rep := s.h.opts.ReplaceAttr; rep != nil && a.Value.Kind() != slog.KindGroup {
+		var gs []string
+		if s.groups != nil {
+			gs = *s.groups
+		}
+		// a.Value is resolved before calling ReplaceAttr, so the user doesn't have to.
+		a = rep(gs, a)
+		// The ReplaceAttr function may return an unresolved Attr.
+		a.Value = a.Value.Resolve()
+	}
+	// Elide empty Attrs.
+	if attrIsEmpty(a) {
+		return false
+	}
+	// Special case: Source.
+	if v := a.Value; v.Kind() == slog.KindAny {
+		if src, ok := v.Any().(*slog.Source); ok {
+			a.Value = sourceGroup(src)
+		}
+	}
+	if a.Value.Kind() == slog.KindGroup {
+		attrs := a.Value.Group()
+		// Output only non-empty groups.
+		if len(attrs) > 0 {
+			// The group may turn out to be empty even though it has attrs (for
+			// example, ReplaceAttr may delete all the attrs).
+			// So remember where we are in the buffer, to restore the position
+			// later if necessary.
+			pos := s.buf.Len()
+			// Inline a group with an empty key.
+			if a.Key != "" {
+				s.openGroup(a.Key)
+			}
+			if !s.appendAttrs(attrs) {
+				s.buf.SetLen(pos)
+				return false
+			}
+			if a.Key != "" {
+				s.closeGroup(a.Key)
+			}
+		}
+	} else {
+		s.appendKey(a.Key)
+		s.appendValue(a.Value)
+	}
+	return true
+}
+
+func (s *handleState) appendError(err error) {
+	s.appendString(fmt.Sprintf("!ERROR:%v", err))
+}
+
+func (s *handleState) appendKey(key string) {
+	s.buf.WriteString(s.sep)
+	s.appendString(key)
+	s.buf.WriteString(s.h.keySep)
+	s.sep = s.h.attrSep
+}
+
+func (s *handleState) appendString(str string) {
+	s.buf.WriteByte('"')
+	*s.buf = appendEscapedJSONString(*s.buf, str)
+	s.buf.WriteByte('"')
+}
+
+func (s *handleState) appendValue(v slog.Value) {
+	defer func() {
+		if r := recover(); r != nil {
+			// If it panics with a nil pointer, the most likely cases are
+			// an encoding.TextMarshaler or error fails to guard against nil,
+			// in which case "<nil>" seems to be the feasible choice.
+			//
+			// Adapted from the code in fmt/print.go.
+			if v := reflect.ValueOf(v.Any()); v.Kind() == reflect.Pointer && v.IsNil() {
+				s.appendString("<nil>")
+				return
+			}
+
+			// Otherwise just print the original panic message.
+			s.appendString(fmt.Sprintf("!PANIC: %v", r))
+		}
+	}()
+
+	err := appendJSONValue(s, v)
+	if err != nil {
+		s.appendError(err)
+	}
+}
