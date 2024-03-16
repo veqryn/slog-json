@@ -103,8 +103,11 @@ type Handler struct {
 // If opts is nil, the default options are used.
 func NewHandler(w io.Writer, opts *HandlerOptions) *Handler {
 	if opts == nil {
-		// Defaults
-		opts = &HandlerOptions{JSONOptions: json.JoinOptions(
+		opts = &HandlerOptions{}
+	}
+	// Defaults
+	if opts.JSONOptions == nil {
+		opts.JSONOptions = json.JoinOptions(
 			json.Deterministic(true),
 			json.DiscardUnknownMembers(false),
 			json.FormatNilMapAsNull(false),
@@ -119,7 +122,7 @@ func NewHandler(w io.Writer, opts *HandlerOptions) *Handler {
 			jsontext.Multiline(false),
 			jsontext.SpaceAfterColon(false),
 			jsontext.SpaceAfterComma(true),
-		)}
+		)
 	}
 
 	// Warn about how to properly avoid duplicates (without throwing errors)

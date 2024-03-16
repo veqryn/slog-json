@@ -1,0 +1,552 @@
+package slogjson
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+var testTime = time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
+
+func TestConcurrentWrites(t *testing.T) {
+	ctx := context.Background()
+	count := 1000
+	var buf bytes.Buffer
+	h := NewHandler(&buf, nil)
+	sub1 := h.WithAttrs([]slog.Attr{slog.Bool("sub1", true)})
+	sub2 := h.WithAttrs([]slog.Attr{slog.Bool("sub2", true)})
+	var wg sync.WaitGroup
+	for i := 0; i < count; i++ {
+		sub1Record := slog.NewRecord(time.Time{}, slog.LevelInfo, "hello from sub1", 0)
+		sub1Record.AddAttrs(slog.Int("i", i))
+		sub2Record := slog.NewRecord(time.Time{}, slog.LevelInfo, "hello from sub2", 0)
+		sub2Record.AddAttrs(slog.Int("i", i))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := sub1.Handle(ctx, sub1Record); err != nil {
+				t.Error(err)
+			}
+			if err := sub2.Handle(ctx, sub2Record); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	for i := 1; i <= 2; i++ {
+		want := "hello from sub" + strconv.Itoa(i)
+		n := strings.Count(buf.String(), want)
+		if n != count {
+			t.Fatalf("want %d occurrences of %q, got %d", count, want, n)
+		}
+	}
+}
+
+// Verify parts of Handler.
+func TestHandler(t *testing.T) {
+	// remove all Attrs
+	removeAll := func(_ []string, a slog.Attr) slog.Attr { return slog.Attr{} }
+
+	attrs := []slog.Attr{slog.String("a", "one"), slog.Int("b", 2), slog.Any("", nil)}
+	preAttrs := []slog.Attr{slog.Int("pre", 3), slog.String("x", "y")}
+
+	for _, test := range []struct {
+		name      string
+		replace   func([]string, slog.Attr) slog.Attr
+		addSource bool
+		with      func(slog.Handler) slog.Handler
+		preAttrs  []slog.Attr
+		attrs     []slog.Attr
+		wantJSON  string
+	}{
+		{
+			name:     "basic",
+			attrs:    attrs,
+			wantJSON: `{"time":"2000-01-02T03:04:05Z", "level":"INFO", "msg":"message", "a":"one", "b":2}`,
+		},
+		{
+			name:     "empty key",
+			attrs:    append(slices.Clip(attrs), slog.Any("", "v")),
+			wantJSON: `{"time":"2000-01-02T03:04:05Z", "level":"INFO", "msg":"message", "a":"one", "b":2, "":"v"}`,
+		},
+		{
+			name:     "cap keys",
+			replace:  upperCaseKey,
+			attrs:    attrs,
+			wantJSON: `{"TIME":"2000-01-02T03:04:05Z", "LEVEL":"INFO", "MSG":"message", "A":"one", "B":2}`,
+		},
+		{
+			name:     "remove all",
+			replace:  removeAll,
+			attrs:    attrs,
+			wantJSON: `{}`,
+		},
+		{
+			name:     "preformatted",
+			with:     func(h slog.Handler) slog.Handler { return h.WithAttrs(preAttrs) },
+			preAttrs: preAttrs,
+			attrs:    attrs,
+			wantJSON: `{"time":"2000-01-02T03:04:05Z", "level":"INFO", "msg":"message", "pre":3, "x":"y", "a":"one", "b":2}`,
+		},
+		{
+			name:     "preformatted cap keys",
+			replace:  upperCaseKey,
+			with:     func(h slog.Handler) slog.Handler { return h.WithAttrs(preAttrs) },
+			preAttrs: preAttrs,
+			attrs:    attrs,
+			wantJSON: `{"TIME":"2000-01-02T03:04:05Z", "LEVEL":"INFO", "MSG":"message", "PRE":3, "X":"y", "A":"one", "B":2}`,
+		},
+		{
+			name:     "preformatted remove all",
+			replace:  removeAll,
+			with:     func(h slog.Handler) slog.Handler { return h.WithAttrs(preAttrs) },
+			preAttrs: preAttrs,
+			attrs:    attrs,
+			wantJSON: "{}",
+		},
+		{
+			name:     "remove built-in",
+			replace:  removeKeys(slog.TimeKey, slog.LevelKey, slog.MessageKey),
+			attrs:    attrs,
+			wantJSON: `{"a":"one", "b":2}`,
+		},
+		{
+			name:     "preformatted remove built-in",
+			replace:  removeKeys(slog.TimeKey, slog.LevelKey, slog.MessageKey),
+			with:     func(h slog.Handler) slog.Handler { return h.WithAttrs(preAttrs) },
+			attrs:    attrs,
+			wantJSON: `{"pre":3, "x":"y", "a":"one", "b":2}`,
+		},
+		{
+			name:    "groups",
+			replace: removeKeys(slog.TimeKey, slog.LevelKey), // to simplify the result
+			attrs: []slog.Attr{
+				slog.Int("a", 1),
+				slog.Group("g",
+					slog.Int("b", 2),
+					slog.Group("h", slog.Int("c", 3)),
+					slog.Int("d", 4)),
+				slog.Int("e", 5),
+			},
+			wantJSON: `{"msg":"message", "a":1, "g":{"b":2, "h":{"c":3}, "d":4}, "e":5}`,
+		},
+		{
+			name:     "empty group",
+			replace:  removeKeys(slog.TimeKey, slog.LevelKey),
+			attrs:    []slog.Attr{slog.Group("g"), slog.Group("h", slog.Int("a", 1))},
+			wantJSON: `{"msg":"message", "h":{"a":1}}`,
+		},
+		{
+			name:    "nested empty group",
+			replace: removeKeys(slog.TimeKey, slog.LevelKey),
+			attrs: []slog.Attr{
+				slog.Group("g",
+					slog.Group("h",
+						slog.Group("i"), slog.Group("j"))),
+			},
+			wantJSON: `{"msg":"message"}`,
+		},
+		{
+			name:    "nested non-empty group",
+			replace: removeKeys(slog.TimeKey, slog.LevelKey),
+			attrs: []slog.Attr{
+				slog.Group("g",
+					slog.Group("h",
+						slog.Group("i"), slog.Group("j", slog.Int("a", 1)))),
+			},
+			wantJSON: `{"msg":"message", "g":{"h":{"j":{"a":1}}}}`,
+		},
+		{
+			name:    "escapes",
+			replace: removeKeys(slog.TimeKey, slog.LevelKey),
+			attrs: []slog.Attr{
+				slog.String("a b", "x\t\n\000y"),
+				slog.Group(" b.c=\"\\x2E\t",
+					slog.String("d=e", "f.g\""),
+					slog.Int("m.d", 1)), // dot is not escaped
+			},
+			wantJSON: `{"msg":"message", "a b":"x\t\n\u0000y", " b.c=\"\\x2E\t":{"d=e":"f.g\"", "m.d":1}}`,
+		},
+		{
+			name:    "LogValuer",
+			replace: removeKeys(slog.TimeKey, slog.LevelKey),
+			attrs: []slog.Attr{
+				slog.Int("a", 1),
+				slog.Any("name", logValueName{"Ren", "Hoek"}),
+				slog.Int("b", 2),
+			},
+			wantJSON: `{"msg":"message", "a":1, "name":{"first":"Ren", "last":"Hoek"}, "b":2}`,
+		},
+		{
+			// Test resolution when there is no ReplaceAttr function.
+			name: "resolve",
+			attrs: []slog.Attr{
+				slog.Any("", &replace{slog.Value{}}), // should be elided
+				slog.Any("name", logValueName{"Ren", "Hoek"}),
+			},
+			wantJSON: `{"time":"2000-01-02T03:04:05Z", "level":"INFO", "msg":"message", "name":{"first":"Ren", "last":"Hoek"}}`,
+		},
+		{
+			name:     "with-group",
+			replace:  removeKeys(slog.TimeKey, slog.LevelKey),
+			with:     func(h slog.Handler) slog.Handler { return h.WithAttrs(preAttrs).WithGroup("s") },
+			attrs:    attrs,
+			wantJSON: `{"msg":"message", "pre":3, "x":"y", "s":{"a":"one", "b":2}}`,
+		},
+		{
+			name:    "preformatted with-groups",
+			replace: removeKeys(slog.TimeKey, slog.LevelKey),
+			with: func(h slog.Handler) slog.Handler {
+				return h.WithAttrs([]slog.Attr{slog.Int("p1", 1)}).
+					WithGroup("s1").
+					WithAttrs([]slog.Attr{slog.Int("p2", 2)}).
+					WithGroup("s2").
+					WithAttrs([]slog.Attr{slog.Int("p3", 3)})
+			},
+			attrs:    attrs,
+			wantJSON: `{"msg":"message", "p1":1, "s1":{"p2":2, "s2":{"p3":3, "a":"one", "b":2}}}`,
+		},
+		{
+			name:    "two with-groups",
+			replace: removeKeys(slog.TimeKey, slog.LevelKey),
+			with: func(h slog.Handler) slog.Handler {
+				return h.WithAttrs([]slog.Attr{slog.Int("p1", 1)}).
+					WithGroup("s1").
+					WithGroup("s2")
+			},
+			attrs:    attrs,
+			wantJSON: `{"msg":"message", "p1":1, "s1":{"s2":{"a":"one", "b":2}}}`,
+		},
+		{
+			name:    "empty with-groups",
+			replace: removeKeys(slog.TimeKey, slog.LevelKey),
+			with: func(h slog.Handler) slog.Handler {
+				return h.WithGroup("x").WithGroup("y")
+			},
+			wantJSON: `{"msg":"message"}`,
+		},
+		{
+			name:    "empty with-groups, no non-empty attrs",
+			replace: removeKeys(slog.TimeKey, slog.LevelKey),
+			with: func(h slog.Handler) slog.Handler {
+				return h.WithGroup("x").WithAttrs([]slog.Attr{slog.Group("g")}).WithGroup("y")
+			},
+			wantJSON: `{"msg":"message"}`,
+		},
+		{
+			name:    "one empty with-group",
+			replace: removeKeys(slog.TimeKey, slog.LevelKey),
+			with: func(h slog.Handler) slog.Handler {
+				return h.WithGroup("x").WithAttrs([]slog.Attr{slog.Int("a", 1)}).WithGroup("y")
+			},
+			attrs:    []slog.Attr{slog.Group("g", slog.Group("h"))},
+			wantJSON: `{"msg":"message", "x":{"a":1}}`,
+		},
+		{
+			name:     "GroupValue as Attr value",
+			replace:  removeKeys(slog.TimeKey, slog.LevelKey),
+			attrs:    []slog.Attr{{"v", slog.AnyValue(slog.IntValue(3))}},
+			wantJSON: `{"msg":"message", "v":3}`,
+		},
+		{
+			name:     "byte slice",
+			replace:  removeKeys(slog.TimeKey, slog.LevelKey),
+			attrs:    []slog.Attr{slog.Any("bs", []byte{1, 2, 3, 4})},
+			wantJSON: `{"msg":"message", "bs":"AQIDBA=="}`,
+		},
+		{
+			name:     "json.RawMessage",
+			replace:  removeKeys(slog.TimeKey, slog.LevelKey),
+			attrs:    []slog.Attr{slog.Any("bs", json.RawMessage([]byte("1234")))},
+			wantJSON: `{"msg":"message", "bs":1234}`,
+		},
+		{
+			name:    "inline group",
+			replace: removeKeys(slog.TimeKey, slog.LevelKey),
+			attrs: []slog.Attr{
+				slog.Int("a", 1),
+				slog.Group("", slog.Int("b", 2), slog.Int("c", 3)),
+				slog.Int("d", 4),
+			},
+			wantJSON: `{"msg":"message", "a":1, "b":2, "c":3, "d":4}`,
+		},
+		{
+			name: "Source",
+			replace: func(gs []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.SourceKey {
+					s := a.Value.Any().(*slog.Source)
+					s.File = filepath.Base(s.File)
+					return slog.Any(a.Key, s)
+				}
+				return removeKeys(slog.TimeKey, slog.LevelKey)(gs, a)
+			},
+			addSource: true,
+			wantJSON:  `{"source":{"function":"github.com/veqryn/slog-json.TestHandler", "file":"handler_test.go", "line":$LINE}, "msg":"message"}`,
+		},
+		{
+			name: "replace built-in with group",
+			replace: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.TimeKey {
+					return slog.Group(slog.TimeKey, "mins", 3, "secs", 2)
+				}
+				if a.Key == slog.LevelKey {
+					return slog.Attr{}
+				}
+				return a
+			},
+			wantJSON: `{"time":{"mins":3, "secs":2}, "msg":"message"}`,
+		},
+		{
+			name:     "replace empty",
+			replace:  func([]string, slog.Attr) slog.Attr { return slog.Attr{} },
+			attrs:    []slog.Attr{slog.Group("g", slog.Int("a", 1))},
+			wantJSON: `{}`,
+		},
+		{
+			name: "replace empty 1",
+			with: func(h slog.Handler) slog.Handler {
+				return h.WithGroup("g").WithAttrs([]slog.Attr{slog.Int("a", 1)})
+			},
+			replace:  func([]string, slog.Attr) slog.Attr { return slog.Attr{} },
+			attrs:    []slog.Attr{slog.Group("h", slog.Int("b", 2))},
+			wantJSON: `{}`,
+		},
+		{
+			name: "replace empty 2",
+			with: func(h slog.Handler) slog.Handler {
+				return h.WithGroup("g").WithAttrs([]slog.Attr{slog.Int("a", 1)}).WithGroup("h").WithAttrs([]slog.Attr{slog.Int("b", 2)})
+			},
+			replace:  func([]string, slog.Attr) slog.Attr { return slog.Attr{} },
+			attrs:    []slog.Attr{slog.Group("i", slog.Int("c", 3))},
+			wantJSON: `{}`,
+		},
+		{
+			name:     "replace empty 3",
+			with:     func(h slog.Handler) slog.Handler { return h.WithGroup("g") },
+			replace:  func([]string, slog.Attr) slog.Attr { return slog.Attr{} },
+			attrs:    []slog.Attr{slog.Int("a", 1)},
+			wantJSON: `{}`,
+		},
+		{
+			name: "replace empty inline",
+			with: func(h slog.Handler) slog.Handler {
+				return h.WithGroup("g").WithAttrs([]slog.Attr{slog.Int("a", 1)}).WithGroup("h").WithAttrs([]slog.Attr{slog.Int("b", 2)})
+			},
+			replace:  func([]string, slog.Attr) slog.Attr { return slog.Attr{} },
+			attrs:    []slog.Attr{slog.Group("", slog.Int("c", 3))},
+			wantJSON: `{}`,
+		},
+		{
+			name: "replace partial empty attrs 1",
+			with: func(h slog.Handler) slog.Handler {
+				return h.WithGroup("g").WithAttrs([]slog.Attr{slog.Int("a", 1)}).WithGroup("h").WithAttrs([]slog.Attr{slog.Int("b", 2)})
+			},
+			replace: func(groups []string, attr slog.Attr) slog.Attr {
+				return removeKeys(slog.TimeKey, slog.LevelKey, slog.MessageKey, "a")(groups, attr)
+			},
+			attrs:    []slog.Attr{slog.Group("i", slog.Int("c", 3))},
+			wantJSON: `{"g":{"h":{"b":2, "i":{"c":3}}}}`,
+		},
+		{
+			name: "replace partial empty attrs 2",
+			with: func(h slog.Handler) slog.Handler {
+				return h.WithGroup("g").WithAttrs([]slog.Attr{slog.Int("a", 1)}).WithAttrs([]slog.Attr{slog.Int("n", 4)}).WithGroup("h").WithAttrs([]slog.Attr{slog.Int("b", 2)})
+			},
+			replace: func(groups []string, attr slog.Attr) slog.Attr {
+				return removeKeys(slog.TimeKey, slog.LevelKey, slog.MessageKey, "a", "b")(groups, attr)
+			},
+			attrs:    []slog.Attr{slog.Group("i", slog.Int("c", 3))},
+			wantJSON: `{"g":{"n":4, "h":{"i":{"c":3}}}}`,
+		},
+		{
+			name: "replace partial empty attrs 3",
+			with: func(h slog.Handler) slog.Handler {
+				return h.WithGroup("g").WithAttrs([]slog.Attr{slog.Int("x", 0)}).WithAttrs([]slog.Attr{slog.Int("a", 1)}).WithAttrs([]slog.Attr{slog.Int("n", 4)}).WithGroup("h").WithAttrs([]slog.Attr{slog.Int("b", 2)})
+			},
+			replace: func(groups []string, attr slog.Attr) slog.Attr {
+				return removeKeys(slog.TimeKey, slog.LevelKey, slog.MessageKey, "a", "c")(groups, attr)
+			},
+			attrs:    []slog.Attr{slog.Group("i", slog.Int("c", 3))},
+			wantJSON: `{"g":{"x":0, "n":4, "h":{"b":2}}}`,
+		},
+		{
+			name: "replace resolved group",
+			replace: func(groups []string, a slog.Attr) slog.Attr {
+				if a.Value.Kind() == slog.KindGroup {
+					return slog.Attr{"bad", slog.IntValue(1)}
+				}
+				return removeKeys(slog.TimeKey, slog.LevelKey, slog.MessageKey)(groups, a)
+			},
+			attrs:    []slog.Attr{slog.Any("name", logValueName{"Perry", "Platypus"})},
+			wantJSON: `{"name":{"first":"Perry", "last":"Platypus"}}`,
+		},
+	} {
+		r := slog.NewRecord(testTime, slog.LevelInfo, "message", callerPC(2))
+		line := strconv.Itoa(recordSource(r).Line)
+		r.AddAttrs(test.attrs...)
+		var buf bytes.Buffer
+		opts := HandlerOptions{ReplaceAttr: test.replace, AddSource: test.addSource}
+		t.Run(test.name, func(t *testing.T) {
+			var h slog.Handler = NewHandler(&buf, &opts)
+			if test.with != nil {
+				h = test.with(h)
+			}
+			buf.Reset()
+			if err := h.Handle(nil, r); err != nil {
+				t.Fatal(err)
+			}
+			want := strings.ReplaceAll(test.wantJSON, "$LINE", line)
+			got := strings.TrimSuffix(buf.String(), "\n")
+			if got != want {
+				t.Errorf("\ngot  %s\nwant %s\n", got, want)
+			}
+		})
+	}
+}
+
+type replace struct {
+	v slog.Value
+}
+
+func (r *replace) LogValue() slog.Value { return r.v }
+
+// callerPC returns the program counter at the given stack depth.
+func callerPC(depth int) uintptr {
+	var pcs [1]uintptr
+	runtime.Callers(depth, pcs[:])
+	return pcs[0]
+}
+
+// removeKeys returns a function suitable for HandlerOptions.ReplaceAttr
+// that removes all Attrs with the given keys.
+func removeKeys(keys ...string) func([]string, slog.Attr) slog.Attr {
+	return func(_ []string, a slog.Attr) slog.Attr {
+		for _, k := range keys {
+			if a.Key == k {
+				return slog.Attr{}
+			}
+		}
+		return a
+	}
+}
+
+func upperCaseKey(_ []string, a slog.Attr) slog.Attr {
+	a.Key = strings.ToUpper(a.Key)
+	return a
+}
+
+type logValueName struct {
+	first, last string
+}
+
+func (n logValueName) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("first", n.first),
+		slog.String("last", n.last))
+}
+
+func TestHandlerEnabled(t *testing.T) {
+	levelVar := func(l slog.Level) *slog.LevelVar {
+		var al slog.LevelVar
+		al.Set(l)
+		return &al
+	}
+
+	for _, test := range []struct {
+		leveler slog.Leveler
+		want    bool
+	}{
+		{nil, true},
+		{slog.LevelWarn, false},
+		{&slog.LevelVar{}, true}, // defaults to Info
+		{levelVar(slog.LevelWarn), false},
+		{slog.LevelDebug, true},
+		{levelVar(slog.LevelDebug), true},
+	} {
+		h := &Handler{opts: HandlerOptions{Level: test.leveler}}
+		got := h.Enabled(nil, slog.LevelInfo)
+		if got != test.want {
+			t.Errorf("%v: got %t, want %t", test.leveler, got, test.want)
+		}
+	}
+}
+
+func TestSecondWith(t *testing.T) {
+	// Verify that a second call to Logger.With does not corrupt
+	// the original.
+	var buf bytes.Buffer
+	h := NewHandler(&buf, &HandlerOptions{ReplaceAttr: removeKeys(slog.TimeKey)})
+	logger := slog.New(h).With(
+		slog.String("app", "playground"),
+		slog.String("role", "tester"),
+		slog.Int("data_version", 2),
+	)
+	appLogger := logger.With("type", "log") // this becomes type=met
+	_ = logger.With("type", "metric")
+	appLogger.Info("foo")
+	got := strings.TrimSpace(buf.String())
+	want := `{"level":"INFO", "msg":"foo", "app":"playground", "role":"tester", "data_version":2, "type":"log"}`
+	if got != want {
+		t.Errorf("\ngot  %s\nwant %s", got, want)
+	}
+}
+
+func TestReplaceAttrGroups(t *testing.T) {
+	// Verify that ReplaceAttr is called with the correct groups.
+	type ga struct {
+		groups string
+		key    string
+		val    string
+	}
+
+	var got []ga
+
+	h := NewHandler(io.Discard, &HandlerOptions{ReplaceAttr: func(gs []string, a slog.Attr) slog.Attr {
+		v := a.Value.String()
+		if a.Key == slog.TimeKey {
+			v = "<now>"
+		}
+		got = append(got, ga{strings.Join(gs, ","), a.Key, v})
+		return a
+	}})
+	slog.New(h).
+		With(slog.Int("a", 1)).
+		WithGroup("g1").
+		With(slog.Int("b", 2)).
+		WithGroup("g2").
+		With(
+			slog.Int("c", 3),
+			slog.Group("g3", slog.Int("d", 4)),
+			slog.Int("e", 5)).
+		Info("m",
+			slog.Int("f", 6),
+			slog.Group("g4", slog.Int("h", 7)),
+			slog.Int("i", 8))
+
+	want := []ga{
+		{"", "a", "1"},
+		{"g1", "b", "2"},
+		{"g1,g2", "c", "3"},
+		{"g1,g2,g3", "d", "4"},
+		{"g1,g2", "e", "5"},
+		{"", "time", "<now>"},
+		{"", "level", "INFO"},
+		{"", "msg", "m"},
+		{"g1,g2", "f", "6"},
+		{"g1,g2,g4", "h", "7"},
+		{"g1,g2", "i", "8"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("\ngot  %v\nwant %v", got, want)
+	}
+}
