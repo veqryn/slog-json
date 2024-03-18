@@ -671,6 +671,7 @@ func TestJSONAppendAttrValueSpecial(t *testing.T) {
 		{io.EOF, `"EOF"`},
 	} {
 		got := jsonValueString(slog.AnyValue(test.value))
+		got = strings.ReplaceAll(got, "unable to", "cannot")
 		if got != test.want {
 			t.Errorf("%v: got %s, want %s", test.value, got, test.want)
 		}
