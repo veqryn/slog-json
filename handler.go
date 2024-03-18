@@ -269,7 +269,7 @@ func (h *Handler) WithGroup(name string) slog.Handler {
 func (h *Handler) Handle(_ context.Context, r slog.Record) error {
 	state := h.newHandleState(buffer.New(), true, "")
 	defer state.free()
-	state.buf.WriteByte('{')
+	_ = state.buf.WriteByte('{')
 
 	// Built-in attributes. They are not in a group.
 	stateGroups := state.groups
@@ -309,7 +309,7 @@ func (h *Handler) Handle(_ context.Context, r slog.Record) error {
 	}
 	state.groups = stateGroups // Restore groups passed to ReplaceAttrs.
 	state.appendNonBuiltIns(r)
-	state.buf.WriteByte('\n')
+	_ = state.buf.WriteByte('\n')
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -334,8 +334,8 @@ func recordSource(r slog.Record) *slog.Source {
 func (s *handleState) appendNonBuiltIns(r slog.Record) {
 	// preformatted Attrs
 	if pfa := s.h.preformattedAttrs; len(pfa) > 0 {
-		s.buf.WriteString(s.sep)
-		s.buf.Write(pfa)
+		_, _ = s.buf.WriteString(s.sep)
+		_, _ = s.buf.Write(pfa)
 		s.sep = s.h.attrSep
 		if pfa[len(pfa)-1] == '{' {
 			s.sep = ""
@@ -368,10 +368,10 @@ func (s *handleState) appendNonBuiltIns(r slog.Record) {
 
 	// Close all open groups.
 	for range s.h.groups[:nOpenGroups] {
-		s.buf.WriteByte('}')
+		_ = s.buf.WriteByte('}')
 	}
 	// Close the top-level object.
-	s.buf.WriteByte('}')
+	_ = s.buf.WriteByte('}')
 }
 
 // handleState holds state for a single call to Handler.handle.
@@ -424,7 +424,7 @@ func (s *handleState) openGroups() {
 // with the given name.
 func (s *handleState) openGroup(name string) {
 	s.appendKey(name)
-	s.buf.WriteByte('{')
+	_ = s.buf.WriteByte('{')
 	s.sep = ""
 
 	// Collect group names for ReplaceAttr.
@@ -435,7 +435,7 @@ func (s *handleState) openGroup(name string) {
 
 // closeGroup ends the group with the given name.
 func (s *handleState) closeGroup(name string) {
-	s.buf.WriteByte('}')
+	_ = s.buf.WriteByte('}')
 
 	s.sep = s.h.attrSep
 	if s.groups != nil {
@@ -537,16 +537,16 @@ func (s *handleState) appendError(err error) {
 }
 
 func (s *handleState) appendKey(key string) {
-	s.buf.WriteString(s.sep)
+	_, _ = s.buf.WriteString(s.sep)
 	s.appendString(key)
-	s.buf.WriteString(s.h.keySep)
+	_, _ = s.buf.WriteString(s.h.keySep)
 	s.sep = s.h.attrSep
 }
 
 func (s *handleState) appendString(str string) {
-	s.buf.WriteByte('"')
+	_ = s.buf.WriteByte('"')
 	*s.buf = appendEscapedJSONString(*s.buf, str)
-	s.buf.WriteByte('"')
+	_ = s.buf.WriteByte('"')
 }
 
 func (s *handleState) appendValue(v slog.Value) {
@@ -580,9 +580,9 @@ func appendJSONTime(s *handleState, t time.Time) {
 		// See golang.org/issue/4556#c15 for more discussion.
 		s.appendError(errors.New("time.Time year outside of range [0,9999]"))
 	}
-	s.buf.WriteByte('"')
+	_ = s.buf.WriteByte('"')
 	*s.buf = t.AppendFormat(*s.buf, time.RFC3339Nano)
-	s.buf.WriteByte('"')
+	_ = s.buf.WriteByte('"')
 }
 
 func appendJSONValue(s *handleState, v slog.Value) error {
@@ -637,7 +637,7 @@ func appendJSONMarshal(buf *buffer.Buffer, v any, opts jsontext.Options) error {
 	if err != nil {
 		return err
 	}
-	buf.Write(bs)
+	_, _ = buf.Write(bs)
 	return nil
 }
 
