@@ -1,0 +1,51 @@
+# This workflow will build a golang project
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
+
+name: Tests
+
+on:
+  push:
+    tags:
+    branches:
+      - main
+  pull_request:
+    branches:
+
+# Declare default permissions as read only.
+permissions: read-all
+
+jobs:
+
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: [ '1.21', '1.22' ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go ${{ matrix.go-version }}
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Display Go version ${{ matrix.go-version }}
+        run: go version
+
+      - name: Install dependencies ${{ matrix.go-version }}
+        run: |
+          go get -t -u golang.org/x/tools/cmd/cover
+          go mod download
+
+      - name: Build ${{ matrix.go-version }}
+        run: go build -v ./...
+
+      - name: Test ${{ matrix.go-version }}
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic
+
+      - name: Upload coverage reports to Codecov ${{ matrix.go-version }}
+        uses: codecov/codecov-action@v4.0.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: veqryn/slog-json
