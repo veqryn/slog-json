@@ -34,11 +34,11 @@ Versus the default standard library JSON Handler:
 
 
 ## Install
-`go get github.com/veqryn/slog-bugsnag`
+`go get github.com/veqryn/slog-json`
 
 ```go
 import (
-	slogbugsnag "github.com/veqryn/slog-bugsnag"
+	slogjson "github.com/veqryn/slog-json"
 )
 ```
 
@@ -89,8 +89,8 @@ This library can interoperate with [github.com/samber/slog-multi](https://github
 in order to easily setup slog workflows such as pipelines, fanout, routing, failover, etc.
 ```go
 slog.SetDefault(slog.New(slogmulti.
-    Pipe(slogctx.NewMiddleware(&slogctx.HandlerOptions{})).
-    Pipe(slogdedup.NewOverwriteMiddleware(&slogdedup.OverwriteHandlerOptions{})).
-    Handler(slogjson.NewHandler(os.Stdout, &slogjson.HandlerOptions{})),
+	Pipe(slogctx.NewMiddleware(&slogctx.HandlerOptions{})).
+	Pipe(slogdedup.NewOverwriteMiddleware(&slogdedup.OverwriteHandlerOptions{})).
+	Handler(slogjson.NewHandler(os.Stdout, &slogjson.HandlerOptions{})),
 ))
 ```
