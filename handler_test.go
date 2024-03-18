@@ -686,6 +686,62 @@ func jsonValueString(v slog.Value) string {
 	return string(buf)
 }
 
+func TestMoreFormatting(t *testing.T) {
+	type Nested struct {
+		Nest any `json:"nest"`
+	}
+
+	overwrittenOpts := &HandlerOptions{
+		JSONOptions: json.JoinOptions(
+			defaultJSONOptions,
+			json.StringifyNumbers(true),         // changed
+			jsontext.AllowDuplicateNames(false), // changed, should be overwritten later with true
+			jsontext.EscapeForHTML(true),        // changed
+			jsontext.Multiline(true),            // changed, should be overwritten later with false
+			jsontext.SpaceAfterColon(true),      // changed, ignored by multiline true
+			jsontext.SpaceAfterComma(true),      // ignored by multiline true
+		),
+	}
+
+	moreWhitespaceOpts := &HandlerOptions{
+		JSONOptions: json.JoinOptions(
+			defaultJSONOptions,
+			jsontext.SpaceAfterColon(true), // changed
+		),
+	}
+
+	var buf bytes.Buffer
+	for _, test := range []struct {
+		opts  *HandlerOptions
+		value any
+		want  string
+	}{
+		{overwrittenOpts, int(1234), `{"time":"2000-01-02T03:04:05Z","level":"INFO","msg":"m","attr":"1234"}`},
+		{overwrittenOpts, Nested{Nest: int(1234)}, `{"time":"2000-01-02T03:04:05Z","level":"INFO","msg":"m","attr":{"nest":"1234"}}`},
+		{overwrittenOpts, uint64(6789), `{"time":"2000-01-02T03:04:05Z","level":"INFO","msg":"m","attr":"6789"}`},
+		{overwrittenOpts, Nested{Nest: uint64(6789)}, `{"time":"2000-01-02T03:04:05Z","level":"INFO","msg":"m","attr":{"nest":"6789"}}`},
+		// The difference in the next two is a little interesting
+		{overwrittenOpts, float32(1234.6789), `{"time":"2000-01-02T03:04:05Z","level":"INFO","msg":"m","attr":"1234.678955078125"}`},
+		{overwrittenOpts, Nested{Nest: float32(1234.6789)}, `{"time":"2000-01-02T03:04:05Z","level":"INFO","msg":"m","attr":{"nest":"1234.679"}}`},
+		// These next two are a TODO to fix up for root level attributes
+		{overwrittenOpts, "<a>&amp;</a>", `{"time":"2000-01-02T03:04:05Z","level":"INFO","msg":"m","attr":"<a>&amp;</a>"}`},
+		{overwrittenOpts, Nested{Nest: "<a>&amp;</a>"}, `{"time":"2000-01-02T03:04:05Z","level":"INFO","msg":"m","attr":{"nest":"\u003ca\u003e\u0026amp;\u003c/a\u003e"}}`},
+		{moreWhitespaceOpts, Nested{Nest: int(1234)}, `{"time": "2000-01-02T03:04:05Z", "level": "INFO", "msg": "m", "attr": {"nest": 1234}}`},
+	} {
+		h := NewHandler(&buf, test.opts)
+		buf.Reset()
+		r := slog.NewRecord(testTime, slog.LevelInfo, "m", callerPC(2))
+		r.AddAttrs(slog.Any("attr", test.value))
+		if err := h.Handle(context.Background(), r); err != nil {
+			t.Errorf("%v: got error: %v", test.value, err)
+			continue
+		}
+		if got := buf.String()[:len(buf.String())-1]; got != test.want {
+			t.Errorf("%v: got %s, want %s", test.value, got, test.want)
+		}
+	}
+}
+
 func BenchmarkJSONHandler(b *testing.B) {
 	for _, bench := range []struct {
 		name string

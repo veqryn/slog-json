@@ -85,6 +85,23 @@ type HandlerOptions struct {
 	JSONOptions jsontext.Options
 }
 
+var defaultJSONOptions = json.JoinOptions(
+	json.Deterministic(true),
+	json.DiscardUnknownMembers(false),
+	json.FormatNilMapAsNull(false),
+	json.FormatNilSliceAsNull(false),
+	json.MatchCaseInsensitiveNames(false),
+	json.StringifyNumbers(false),
+	json.RejectUnknownMembers(false),
+	jsontext.AllowDuplicateNames(true),
+	jsontext.AllowInvalidUTF8(true),
+	jsontext.EscapeForHTML(false),
+	jsontext.EscapeForJS(true),
+	jsontext.Multiline(false),
+	jsontext.SpaceAfterColon(false),
+	jsontext.SpaceAfterComma(true),
+)
+
 // Handler is a [log/slog.Handler] that writes Records to an [io.Writer] as
 // line-delimited JSON objects.
 type Handler struct {
@@ -107,22 +124,7 @@ func NewHandler(w io.Writer, opts *HandlerOptions) *Handler {
 	}
 	// Defaults
 	if opts.JSONOptions == nil {
-		opts.JSONOptions = json.JoinOptions(
-			json.Deterministic(true),
-			json.DiscardUnknownMembers(false),
-			json.FormatNilMapAsNull(false),
-			json.FormatNilSliceAsNull(false),
-			json.MatchCaseInsensitiveNames(false),
-			json.StringifyNumbers(false),
-			json.RejectUnknownMembers(false),
-			jsontext.AllowDuplicateNames(true),
-			jsontext.AllowInvalidUTF8(true),
-			jsontext.EscapeForHTML(false),
-			jsontext.EscapeForJS(true),
-			jsontext.Multiline(false),
-			jsontext.SpaceAfterColon(false),
-			jsontext.SpaceAfterComma(true),
-		)
+		opts.JSONOptions = defaultJSONOptions
 	}
 
 	// Warn about how to properly avoid duplicates (without throwing errors)
