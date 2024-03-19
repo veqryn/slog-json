@@ -14,8 +14,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/go-json-experiment/json"
-	"github.com/go-json-experiment/json/jsontext"
+	"github.com/veqryn/json"
+	"github.com/veqryn/json/jsontext"
 	"github.com/veqryn/slog-json/internal/buffer"
 )
 
