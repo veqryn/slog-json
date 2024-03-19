@@ -8,7 +8,8 @@
 [![Contributors](https://img.shields.io/github/contributors/veqryn/slog-json)](https://github.com/veqryn/slog-json/graphs/contributors)
 [![License](https://img.shields.io/github/license/veqryn/slog-json)](./LICENSE)
 
-Format your Golang structured logging (slog) using the [JSON v2](https://github.com/golang/go/discussions/63397) [library](https://github.com/go-json-experiment/json), with optional single-line pretty-printing.
+Format your Golang structured logging (slog) using the [JSON v2](https://github.com/golang/go/discussions/63397)
+[library](https://github.com/go-json-experiment/json), with optional single-line pretty-printing.
 
 This is so much easier to read than the default json:
 ```text
@@ -24,6 +25,11 @@ Versus the default standard library JSON Handler:
 ```text
 {"time":"2000-01-02T03:04:05Z","level":"INFO","msg":"m","attr":{"nest":"1234"}}
 ```
+
+Additional benefits:
+* JSON v2 is faster than the stdlib JSON v1 ([up to 9x faster](https://github.com/go-json-experiment/jsonbench)).
+* Make use of all marshaling and encoding options JSON v2 has available.
+* Improved correctness and behavior with [JSON v2](https://github.com/golang/go/discussions/63397).
 
 ### Other Great SLOG Utilities
 - [slogctx](https://github.com/veqryn/slog-context): Add attributes to context and have them automatically added to all log lines. Work with a logger stored in context.
@@ -93,4 +99,35 @@ slog.SetDefault(slog.New(slogmulti.
 	Pipe(slogdedup.NewOverwriteMiddleware(&slogdedup.OverwriteHandlerOptions{})).
 	Handler(slogjson.NewHandler(os.Stdout, &slogjson.HandlerOptions{})),
 ))
+```
+
+### Benchmarks
+Compared with the stdlib `log/slog.JSONHandler` using the `encoding/json` v1 package,
+this `slogjson.Handler` using JSON v2 is about 7% faster, using fewer bytes per op.
+
+The benchmark code is identical; written by the Golang authors for slog handlers.
+
+Benchmarks were run on an Macbook M1 Pro.
+
+The underlying JSON v2 encoder is up to 9x faster than the stdlib v1 encoder,
+as seen in [these benchmarks](https://github.com/go-json-experiment/jsonbench).
+
+`slogjson.Handler` Benchmarks:
+```text
+BenchmarkJSONHandler/defaults-10         	 1654575	       718.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkJSONHandler/time_format-10      	  918249	      1258 ns/op	      56 B/op	       4 allocs/op
+BenchmarkJSONHandler/time_unix-10        	 1000000	      1106 ns/op	      24 B/op	       3 allocs/op
+BenchmarkPreformatting/separate-10         	 1662286	       714.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreformatting/struct-10           	 1685990	       717.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreformatting/struct_file-10      	  540447	      2593 ns/op	       0 B/op	       0 allocs/op
+```
+
+`slog.JSONHandler` Benchmarks:
+```text
+BenchmarkJSONHandler/defaults-10         	 1562847	       768.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkJSONHandler/time_format-10      	  840888	      1349 ns/op	     152 B/op	       4 allocs/op
+BenchmarkJSONHandler/time_unix-10        	 1000000	      1165 ns/op	     120 B/op	       3 allocs/op
+BenchmarkPreformatting/separate-10         	 1550346	       778.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreformatting/struct-10           	 1572177	       766.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreformatting/struct_file-10      	  508678	      2631 ns/op	       0 B/op	       0 allocs/op
 ```
