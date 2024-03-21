@@ -16,7 +16,7 @@ Versus the default standard library JSON Handler:
 
 Additional benefits:
 	* JSON v2 is faster than the stdlib JSON v1 (up to 9x faster).
-	* Make use of all marshaling and encoding options JSON v2 has available.
+	* Can make use of all marshaling and encoding options JSON v2 has available.
 	* Improved correctness and behavior with JSON v2. See: https://github.com/golang/go/discussions/63397
 */
 package slogjson
