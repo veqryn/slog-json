@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/veqryn/json"
-	"github.com/veqryn/json/jsontext"
+	"github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"github.com/veqryn/slog-json/internal/buffer"
 )
 
@@ -694,13 +694,10 @@ func TestMoreFormatting(t *testing.T) {
 
 	overwrittenOpts := &HandlerOptions{
 		JSONOptions: json.JoinOptions(
-			defaultJSONOptions,
 			json.StringifyNumbers(true),         // changed
 			jsontext.AllowDuplicateNames(false), // changed, should be overwritten later with true
 			jsontext.EscapeForHTML(true),        // changed
 			jsontext.Multiline(true),            // changed, should be overwritten later with false
-			jsontext.SpaceAfterColon(true),      // changed, ignored by multiline true
-			jsontext.SpaceAfterComma(true),      // ignored by multiline true
 		),
 	}
 

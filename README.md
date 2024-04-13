@@ -56,8 +56,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/veqryn/json"
-	"github.com/veqryn/json/jsontext"
+	"github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	slogjson "github.com/veqryn/slog-json"
 )
 

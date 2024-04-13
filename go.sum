@@ -1,2 +1,2 @@
-github.com/veqryn/json v0.1.0 h1:/VRRuG8TKnyIzuBf2jw5rn9oFrzMNxqyv0BekvDyLWM=
-github.com/veqryn/json v0.1.0/go.mod h1:d7xTdEVXlquK1eJxQic/C8+Jso+K/q7rR91kjlcdgYQ=
+github.com/go-json-experiment/json v0.0.0-20240412061110-8868a69194fa h1:JUl7LfZewNlppx7w/82EwZ7d/N2nTXncAOeE55tI3Pk=
+github.com/go-json-experiment/json v0.0.0-20240412061110-8868a69194fa/go.mod h1:6daplAwHHGbUGib4990V3Il26O0OC4aRyvewaaAihaA=
