@@ -618,8 +618,8 @@ func appendJSONValue(s *handleState, v slog.Value) error {
 		appendJSONTime(s, v.Time())
 	case slog.KindAny:
 		a := v.Any()
-		_, jm := a.(json.MarshalerV1)
-		_, jm2 := a.(json.MarshalerV2)
+		_, jm := a.(json.Marshaler)
+		_, jm2 := a.(json.MarshalerTo)
 		if err, ok := a.(error); ok && !jm && !jm2 {
 			s.appendString(err.Error())
 		} else {
