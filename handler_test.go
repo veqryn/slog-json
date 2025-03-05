@@ -665,9 +665,9 @@ func TestJSONAppendAttrValueSpecial(t *testing.T) {
 		value any
 		want  string
 	}{
-		{math.NaN(), `"!ERROR:json: cannot marshal Go value of type float64: invalid value: NaN"`},
-		{math.Inf(+1), `"!ERROR:json: cannot marshal Go value of type float64: invalid value: +Inf"`},
-		{math.Inf(-1), `"!ERROR:json: cannot marshal Go value of type float64: invalid value: -Inf"`},
+		{math.NaN(), `"!ERROR:json: cannot marshal from Go float64: unsupported value: NaN"`},
+		{math.Inf(+1), `"!ERROR:json: cannot marshal from Go float64: unsupported value: +Inf"`},
+		{math.Inf(-1), `"!ERROR:json: cannot marshal from Go float64: unsupported value: -Inf"`},
 		{io.EOF, `"EOF"`},
 	} {
 		got := jsonValueString(slog.AnyValue(test.value))
