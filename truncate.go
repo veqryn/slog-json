@@ -46,13 +46,13 @@ func ReplaceAttrTruncate(maxLogFieldLength int, jsonOptions jsonv2.Options) func
 			// * Use any custom or third party marshallers defined in the json options.
 			//   Example: convert protobuf messages to JSON using the canonical protobuf<->json spec
 			//   (because otherwise things like timestamps get turned into garbage).
-			//   Even if the protobuf is nested instead a struct or a slice ([]any, []*Proto, etc).
+			//   Even if the protobuf is nested inside a struct or a slice ([]any, []*Proto, etc).
 			//   This is difficult because any slice type could contain a protobuf nested in it.
 			// * Truncate any large structs, slices, strings, etc.
 			//
-			// In order to accomplish the above in the most flexible manner, without using reflect,
-			// we will pre-marshal the value into a jsonv1.RawMessage([]byte), using the same
-			// marshaller options our slog handler is using, then truncate if necessary.
+			// In order to accomplish the above in the most flexible manner, we will pre-marshal the
+			// value into a RawMessage([]byte), using the same marshaller options our slog handler
+			// is using, then truncate if necessary.
 			sjson, err := jsonv2.Marshal(value, jsonOptions)
 			if err == nil {
 				a = slog.Any(a.Key, jsonv1.RawMessage(sjson))

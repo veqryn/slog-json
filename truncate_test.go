@@ -15,13 +15,13 @@ import (
 	jsonv2text "github.com/go-json-experiment/json/jsontext"
 )
 
-func TestReplaceAttrTruncate(t *testing.T) {
+func TestReplaceAttrTruncateLong(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
 	buf := &bytes.Buffer{}
 
-	maxLogFieldLength := 99
+	maxLogFieldLength := 999
 
 	logger := slog.New(NewHandler(buf, &HandlerOptions{
 		AddSource:   false,
@@ -42,11 +42,7 @@ func TestReplaceAttrTruncate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	type structJSON struct {
-		Value string `json:"value"`
-	}
-
-	longStruct := structJSON{Value: longValue}
+	longStruct := ValueStruct{Value: longValue}
 	longStructJSON, err := jsonv2.Marshal(longStruct, jsonOpts)
 	if err != nil {
 		t.Fatal(err)
@@ -78,13 +74,13 @@ func TestReplaceAttrTruncate(t *testing.T) {
 	// t.Log(string(customMarshalledJSON))
 	// t.Log(buf.String())
 
-	var output simpleOutput
+	var output simpleOutputTruncated
 	err = jsonv2.Unmarshal(buf.Bytes(), &output)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	expected := simpleOutput{
+	expected := simpleOutputTruncated{
 		Time:    output.Time,
 		Level:   "WARN",
 		Msg:     "hello world",
@@ -139,7 +135,7 @@ func TestReplaceAttrTruncate(t *testing.T) {
 	}
 }
 
-type simpleOutput struct {
+type simpleOutputTruncated struct {
 	Time  time.Time `json:"time"`
 	Level string    `json:"level"`
 	Msg   string    `json:"msg"`
@@ -158,6 +154,103 @@ type simpleOutput struct {
 	DescriptiveError   replaced `json:"descriptiveError"`
 }
 
+func TestReplaceAttrTruncateShort(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	buf := &bytes.Buffer{}
+
+	logger := slog.New(NewHandler(buf, &HandlerOptions{
+		AddSource:   false,
+		Level:       slog.LevelDebug,
+		JSONOptions: jsonOpts,
+
+		// ReplaceAttr intercepts some attributes before they are logged to change their format
+		ReplaceAttr: ReplaceAttrTruncate(999, jsonOpts),
+	}))
+
+	longValue := "abcdefghijklmnopqrstuvwxyz \"こんにちは世界\\/\t0123456789\r\n"
+	for i := 0; i < 2; i++ {
+		longValue += longValue
+	}
+
+	longStruct := ValueStruct{Value: longValue}
+	longStructJSON, err := jsonv2.Marshal(longStruct, jsonOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	customMarshalled := NewDescriptiveStruct("descriptiveStruct", longValue)
+
+	logger.WarnContext(ctx, "hello world",
+		slog.Any("nil", nil),
+		slog.String("string", longValue),
+		slog.Any("string2", longValue),
+		slog.Any("bytes", []byte(longValue)),
+		slog.Any("struct", longStruct),
+		slog.Any("slice", []any{"slice", longStruct}),
+		slog.Any("json.RawMessage", jsonv1.RawMessage(longStructJSON)),
+		slog.Any("jsontext.Value", jsonv2text.Value(longStructJSON)),
+		slog.Any("descriptiveStruct", customMarshalled),
+		slog.Any("descriptiveStructs", []any{"de", customMarshalled}),
+		slog.Any("error", errors.New(longValue)),
+		slog.Any("descriptiveError", NewDescriptiveError("my error", longValue)),
+	)
+
+	// t.Log(len(longValue))
+	// t.Log(string(longStructJSON))
+	// t.Log(string(customMarshalledJSON))
+	// t.Log(buf.String())
+
+	var output simpleOutputNonTruncated
+	err = jsonv2.Unmarshal(buf.Bytes(), &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Confirm nothing was truncated because it was short enough
+	expected := simpleOutputNonTruncated{
+		Time:               output.Time,
+		Level:              "WARN",
+		Msg:                "hello world",
+		Any:                nil,
+		String:             longValue,
+		String2:            longValue,
+		Bytes:              longValue,
+		Struct:             ValueStruct{Value: longValue},
+		Slice:              []any{"slice", map[string]any{"value": longValue}},
+		JsonRawMessage:     ValueStruct{Value: longValue},
+		JsontextValue:      ValueStruct{Value: longValue},
+		DescriptiveStruct:  longValue,
+		DescriptiveStructs: []any{"de", longValue},
+		Err:                longValue,
+		DescriptiveError:   longValue,
+	}
+
+	if !reflect.DeepEqual(output, expected) {
+		t.Fatalf("Expected:\n%#v\n\nGot:\n%#v\n\nRaw:%s", expected, output, buf.String())
+	}
+}
+
+type simpleOutputNonTruncated struct {
+	Time  time.Time `json:"time"`
+	Level string    `json:"level"`
+	Msg   string    `json:"msg"`
+
+	Any                any         `json:"any"`
+	String             string      `json:"string"`
+	String2            string      `json:"string2"`
+	Bytes              string      `json:"bytes"`
+	Struct             ValueStruct `json:"struct"`
+	Slice              []any       `json:"slice"`
+	JsonRawMessage     ValueStruct `json:"json.RawMessage"`
+	JsontextValue      ValueStruct `json:"jsontext.Value"`
+	DescriptiveStruct  string      `json:"descriptiveStruct"`
+	DescriptiveStructs []any       `json:"descriptiveStructs"`
+	Err                string      `json:"error"`
+	DescriptiveError   string      `json:"descriptiveError"`
+}
+
 type DescriptiveStruct struct {
 	description string
 	name        string
@@ -169,4 +262,8 @@ func NewDescriptiveStruct(name string, description string) *DescriptiveStruct {
 
 func (de *DescriptiveStruct) Description() string {
 	return de.description
+}
+
+type ValueStruct struct {
+	Value string `json:"value"`
 }

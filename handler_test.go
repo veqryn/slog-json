@@ -652,7 +652,9 @@ func TestAppendJSONValue(t *testing.T) {
 
 func marshalJSON(x any) (string, error) {
 	var buf bytes.Buffer
-	err := json.MarshalWrite(&buf, x, jsontext.AllowInvalidUTF8(true), jsontext.EscapeForJS(true))
+	err := json.MarshalWrite(&buf, x, jsontext.AllowInvalidUTF8(true), jsontext.EscapeForJS(true), json.WithMarshalers(json.MarshalToFunc(func(e *jsontext.Encoder, t time.Duration) error {
+		return e.WriteToken(jsontext.String(t.String()))
+	})))
 	if err != nil {
 		return "", err
 	}
