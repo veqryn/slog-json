@@ -1,6 +1,7 @@
 package slogjson
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -73,6 +74,7 @@ type HandlerOptions struct {
 	// 	json.FormatNilMapAsNull(false),
 	// 	json.FormatNilSliceAsNull(false),
 	// 	json.MatchCaseInsensitiveNames(false),
+	// 	json.OmitZeroStructFields(false),
 	// 	json.StringifyNumbers(false),
 	// 	json.RejectUnknownMembers(false),
 	// 	jsontext.AllowDuplicateNames(true),
@@ -80,26 +82,36 @@ type HandlerOptions struct {
 	// 	jsontext.EscapeForHTML(false),
 	// 	jsontext.EscapeForJS(true),
 	// 	jsontext.Multiline(false),
+	// 	jsontext.PreserveRawStrings(false),
+	// 	jsontext.ReorderRawObjects(false),
 	// 	jsontext.SpaceAfterColon(false),
 	// 	jsontext.SpaceAfterComma(true),
+	// 	(no ident)
 	JSONOptions jsontext.Options
 }
 
 var defaultJSONOptions = json.JoinOptions(
 	json.Deterministic(true),
-	json.DiscardUnknownMembers(false),
-	json.FormatNilMapAsNull(false),
-	json.FormatNilSliceAsNull(false),
-	json.MatchCaseInsensitiveNames(false),
-	json.StringifyNumbers(false),
-	json.RejectUnknownMembers(false),
+	// json.DiscardUnknownMembers(false),
+	// json.FormatNilMapAsNull(false),
+	// json.FormatNilSliceAsNull(false),
+	// json.MatchCaseInsensitiveNames(false),
+	// json.OmitZeroStructFields(false),
+	// json.StringifyNumbers(false),
+	// json.RejectUnknownMembers(false),
 	jsontext.AllowDuplicateNames(true),
 	jsontext.AllowInvalidUTF8(true),
-	jsontext.EscapeForHTML(false),
+	// jsontext.CanonicalizeRawFloats(false),
+	// jsontext.CanonicalizeRawInts(false),
+	// jsontext.EscapeForHTML(false),
 	jsontext.EscapeForJS(true),
-	jsontext.Multiline(false),
-	jsontext.SpaceAfterColon(false),
+	// jsontext.Multiline(false),
+	// jsontext.PreserveRawStrings(false),
+	// jsontext.ReorderRawObjects(false),
+	// jsontext.SpaceAfterColon(false),
 	jsontext.SpaceAfterComma(true),
+	// jsontext.WithIndent(...),
+	// jsontext.WithIndentPrefix(...),
 )
 
 // Handler is a [log/slog.Handler] that writes Records to an [io.Writer] as
@@ -141,6 +153,9 @@ func NewHandler(w io.Writer, opts *HandlerOptions) *Handler {
 		jsontext.AllowDuplicateNames(true),
 		jsontext.Multiline(false),
 	)
+
+	// Add a default marshaler for all `error` types
+	opts.JSONOptions = appendErrorMarshaler(opts.JSONOptions)
 
 	// TODO: handle the following options:
 	// jsontext.AllowInvalidUTF8(false) // root keys and string values
@@ -258,9 +273,10 @@ func (h *Handler) WithGroup(name string) slog.Handler {
 // Values are formatted using the provided [json.Options], with two exceptions.
 //
 // First, an Attr whose Value is of type error is formatted as a string, by
-// calling its Error method. Only errors in Attrs receive this special treatment,
-// not errors embedded in structs, slices, maps or other data structures that
-// are processed by the [json] package.
+// calling its Error method, if the error type does not implement
+// [json.Marshaler] or [json.MarshalerTo], and the json options provided does
+// not include any [json.Marshalers] for this type. This affects nested errors
+// and errors present in slices as well.
 //
 // Second, an encoding failure does not cause Handle to return an error.
 // Instead, the error message is formatted as a string.
@@ -617,18 +633,47 @@ func appendJSONValue(s *handleState, v slog.Value) error {
 	case slog.KindTime:
 		appendJSONTime(s, v.Time())
 	case slog.KindAny:
-		a := v.Any()
-		_, jm := a.(json.Marshaler)
-		_, jm2 := a.(json.MarshalerTo)
-		if err, ok := a.(error); ok && !jm && !jm2 {
-			s.appendString(err.Error())
-		} else {
-			return appendJSONMarshal(s.buf, a, s.h.opts.JSONOptions)
-		}
+		return appendJSONMarshal(s.buf, v.Any(), s.h.opts.JSONOptions)
 	default:
 		panic(fmt.Sprintf("bad kind: %s", v.Kind()))
 	}
 	return nil
+}
+
+// appendErrorMarshaler adds a default marshaler for all `error` types
+func appendErrorMarshaler(options json.Options) json.Options {
+	marshallers, ok := json.GetOption(options, json.WithMarshalers)
+	if ok {
+		marshallers = json.JoinMarshalers(marshallers, errorMarshaler(options))
+	} else {
+		marshallers = errorMarshaler(options)
+	}
+	return json.JoinOptions(
+		options,
+		json.WithMarshalers(marshallers),
+	)
+}
+
+// errorMarshaler is used with json.WithMarshalers as the last marshaler,
+// able to marshal error messages.
+func errorMarshaler(options json.Options) *json.Marshalers {
+	return json.MarshalFunc(func(err error) ([]byte, error) {
+		switch f := err.(type) {
+		case json.MarshalerTo:
+			buf := &bytes.Buffer{}
+			err := f.MarshalJSONTo(jsontext.NewEncoder(buf, options))
+			return buf.Bytes(), err
+		case json.Marshaler:
+			return f.MarshalJSON()
+		}
+
+		str := err.Error()
+		buf := make([]byte, 0, len(str)+2)
+		buf = append(buf, '"')
+		buf = appendEscapedJSONString(buf, str)
+		buf = append(buf, '"')
+		return buf, nil
+	})
 }
 
 func appendJSONMarshal(buf *buffer.Buffer, v any, opts jsontext.Options) error {
