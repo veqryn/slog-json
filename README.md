@@ -34,6 +34,7 @@ Additional benefits:
 ### Other Great SLOG Utilities
 - [slogctx](https://github.com/veqryn/slog-context): Add attributes to context and have them automatically added to all log lines. Work with a logger stored in context.
 - [slogotel](https://github.com/veqryn/slog-context/tree/main/otel): Automatically extract and add [OpenTelemetry](https://opentelemetry.io/) TraceID's to all log lines.
+- [sloggrpc](https://github.com/veqryn/slog-context/tree/main/grpc): Instrument [GRPC](https://grpc.io/) with automatic logging of all requests and responses.
 - [slogdedup](https://github.com/veqryn/slog-dedup): Middleware that deduplicates and sorts attributes. Particularly useful for JSON logging. Format logs for aggregators (Graylog, GCP/Stackdriver, etc).
 - [slogbugsnag](https://github.com/veqryn/slog-bugsnag): Middleware that pipes Errors to [Bugsnag](https://www.bugsnag.com/).
 - [slogjson](https://github.com/veqryn/slog-json): Formatter that uses the [JSON v2](https://github.com/golang/go/discussions/63397) [library](https://github.com/go-json-experiment/json), with optional single-line pretty-printing.
@@ -87,6 +88,105 @@ func main() {
 
 type Nested struct {
 	Nest any `json:"nest"`
+}
+```
+
+## Complex Usage
+```go
+package main
+
+import (
+	"log/slog"
+	"os"
+	"time"
+
+	"github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
+	slogmulti "github.com/samber/slog-multi"
+	slogctx "github.com/veqryn/slog-context"
+	slogotel "github.com/veqryn/slog-context/otel"
+	slogdedup "github.com/veqryn/slog-dedup"
+	slogjson "github.com/veqryn/slog-json"
+	"google.golang.org/protobuf/encoding/protojson"
+)
+
+func main() {
+	// slogmulti chains slog middlewares
+	slog.SetDefault(slog.New(slogmulti.
+		// slogctx allows putting attributes into the context and have them show up in the logs,
+		// and allows putting the slog logger in the context as well.
+		Pipe(slogctx.NewMiddleware(&slogctx.HandlerOptions{
+			Appenders: []slogctx.AttrExtractor{
+				slogctx.ExtractAppended,
+				slogotel.ExtractTraceSpanID, // Automatically add the OTEL trace/span ID to all log lines
+			},
+		})).
+
+		// slogdedup removes duplicates (which can cause invalid json)
+		Pipe(slogdedup.NewOverwriteMiddleware(nil)).
+
+		// slogjson uses the future json v2 golang stdlib package,
+		// which is faster, more correct, and allows single-line-pretty-printing
+		Handler(slogjson.NewHandler(os.Stdout, &slogjson.HandlerOptions{
+			AddSource:   false,
+			Level:       slog.LevelDebug,
+			JSONOptions: jsonOpts,
+
+			// ReplaceAttr intercepts some attributes before they are logged to change their format
+			ReplaceAttr: replaceAttr(),
+		})),
+	))
+}
+
+const (
+	// AWS Cloudwatch sorts by time as a string, so force it to a constant size
+	RFC3339NanoConstantSize = "2006-01-02T15:04:05.000000000Z07:00"
+
+	// AWS Cloudwatch has a limit of 256kb, GCP Stackdriver is 100kb, Azure is 32kb total and 8kb per field, docker is 16kb, many Java based systems have a max of 8221.
+	// Since there can be multiple attributes and the truncation is happening per attribute, and it is a lot harder to control total length, set the field length a bit shorter.
+	maxLogFieldLength = 4000
+)
+
+// json options to use by the log handler
+var jsonOpts = json.JoinOptions(
+	json.Deterministic(true),
+	jsontext.AllowDuplicateNames(true), // No need to slow down the marshaller when our middleware is doing it for us already
+	jsontext.AllowInvalidUTF8(true),
+	jsontext.EscapeForJS(false),
+	jsontext.SpaceAfterColon(false),
+	jsontext.SpaceAfterComma(true),
+
+	// WithMarshalers will handle values nested inside structs and slices.
+	json.WithMarshalers(json.JoinMarshalers(
+		// []byte's are unreadable, so cast to string.
+		json.MarshalToFunc(func(encoder *jsontext.Encoder, b []byte) error {
+			return encoder.WriteToken(jsontext.String(string(b)))
+		}),
+
+		// We like time.Duration to be written out a certain way
+		json.MarshalToFunc(func(e *jsontext.Encoder, t time.Duration) error {
+			return e.WriteToken(jsontext.String(t.String()))
+		}),
+
+		// Convert protobuf messages into JSON using the canonical protobuf<->json spec
+		json.MarshalFunc((&protojson.MarshalOptions{UseProtoNames: true}).Marshal),
+	)),
+)
+
+// replaceAttr returns a replacement function that will reformat the log time,
+// as well as truncate very long attributes (>4000 bytes).
+func replaceAttr() func([]string, slog.Attr) slog.Attr {
+	truncator := slogjson.ReplaceAttrTruncate(maxLogFieldLength, jsonOpts)
+	return func(groups []string, a slog.Attr) slog.Attr {
+		// Output the top level time argument with a specific format,
+		// Because AWS Cloudwatch sorts time as a string instead of as a time.
+		if groups == nil && a.Value.Kind() == slog.KindTime {
+			return slog.String(a.Key, a.Value.Time().Format(RFC3339NanoConstantSize))
+		}
+
+		// Truncate the attribute value if necessary
+		return truncator(groups, a)
+	}
 }
 ```
 

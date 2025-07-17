@@ -652,7 +652,9 @@ func TestAppendJSONValue(t *testing.T) {
 
 func marshalJSON(x any) (string, error) {
 	var buf bytes.Buffer
-	err := json.MarshalWrite(&buf, x, jsontext.AllowInvalidUTF8(true), jsontext.EscapeForJS(true))
+	err := json.MarshalWrite(&buf, x, jsontext.AllowInvalidUTF8(true), jsontext.EscapeForJS(true), json.WithMarshalers(json.MarshalToFunc(func(e *jsontext.Encoder, t time.Duration) error {
+		return e.WriteToken(jsontext.String(t.String()))
+	})))
 	if err != nil {
 		return "", err
 	}
@@ -680,7 +682,7 @@ func TestJSONAppendAttrValueSpecial(t *testing.T) {
 
 func jsonValueString(v slog.Value) string {
 	var buf []byte
-	s := &handleState{h: &Handler{}, buf: (*buffer.Buffer)(&buf)}
+	s := &handleState{h: &Handler{opts: HandlerOptions{JSONOptions: json.WithMarshalers(errorMarshaler(nil))}}, buf: (*buffer.Buffer)(&buf)}
 	if err := appendJSONValue(s, v); err != nil {
 		s.appendError(err)
 	}
@@ -737,6 +739,59 @@ func TestMoreFormatting(t *testing.T) {
 		if got := buf.String()[:len(buf.String())-1]; got != test.want {
 			t.Errorf("%v: got %s, want %s", test.value, got, test.want)
 		}
+	}
+}
+
+type DescriptiveError struct {
+	description string
+	name        string
+}
+
+func NewDescriptiveError(name string, description string) *DescriptiveError {
+	return &DescriptiveError{description: description, name: name}
+}
+
+func (de *DescriptiveError) Error() string {
+	return de.name
+}
+
+func (de *DescriptiveError) Description() string {
+	return de.description
+}
+
+var jsonOpts = json.JoinOptions(
+	json.Deterministic(true),
+	jsontext.AllowDuplicateNames(true),
+	jsontext.AllowInvalidUTF8(true),
+	jsontext.SpaceAfterComma(true),
+	json.WithMarshalers(json.JoinMarshalers(
+		json.MarshalToFunc(func(encoder *jsontext.Encoder, de *DescriptiveStruct) error {
+			return encoder.WriteToken(jsontext.String(de.Description()))
+		}),
+		json.MarshalToFunc(func(encoder *jsontext.Encoder, de *DescriptiveError) error {
+			return encoder.WriteToken(jsontext.String(de.Description()))
+		}),
+	)),
+)
+
+func TestWithMarshalers(t *testing.T) {
+	t.Parallel()
+
+	buf := &bytes.Buffer{}
+	logger := slog.New(NewHandler(buf, &HandlerOptions{
+		Level:       slog.LevelDebug,
+		JSONOptions: jsonOpts,
+	}))
+
+	basicErr := errors.New("basic error")
+	dErr := NewDescriptiveError("myError", "My Description")
+
+	logger.Error("Oh no", "basic", basicErr, "descriptive", dErr)
+	// t.Log(buf.String())
+
+	expectedSuffix := `"level":"ERROR", "msg":"Oh no", "basic":"basic error", "descriptive":"My Description"}`
+	if !strings.HasSuffix(strings.TrimSpace(buf.String()), expectedSuffix) {
+		t.Fatalf("Got: %s\nWant ending with:%s", buf.String(), expectedSuffix)
 	}
 }
 
