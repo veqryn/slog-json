@@ -20,13 +20,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: [ '1.24' ]
+        go-version: [ '1.24', '1.25', '1.26', '1.27' ]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Go ${{ matrix.go-version }}
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go-version }}
 
@@ -34,9 +34,7 @@ jobs:
         run: go version
 
       - name: Install dependencies ${{ matrix.go-version }}
-        run: |
-          go get -t -u golang.org/x/tools/cmd/cover
-          go mod download
+        run: go mod download
 
       - name: Build ${{ matrix.go-version }}
         run: go build -v ./...
