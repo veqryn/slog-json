@@ -2,6 +2,3 @@ version: "2"
 
 run:
   tests: false
-
-  exclude-dirs:
-    - internal/buffer
