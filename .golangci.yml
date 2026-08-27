@@ -3,5 +3,6 @@ version: "2"
 run:
   tests: false
 
-skip-dirs:
-  - internal/buffer
+issues:
+  exclude-dirs:
+    - internal/buffer
