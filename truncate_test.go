@@ -4,15 +4,14 @@ import (
 	"bytes"
 	"context"
 	jsonv1 "encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
 	"testing"
 	"time"
-
-	jsonv2 "github.com/go-json-experiment/json"
-	jsonv2text "github.com/go-json-experiment/json/jsontext"
 )
 
 func TestReplaceAttrTruncateLong(t *testing.T) {
@@ -37,19 +36,19 @@ func TestReplaceAttrTruncateLong(t *testing.T) {
 		longValue += longValue
 	}
 
-	longValueJSON, err := jsonv2.Marshal(longValue, jsonOpts)
+	longValueJSON, err := json.Marshal(longValue, jsonOpts)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	longStruct := ValueStruct{Value: longValue}
-	longStructJSON, err := jsonv2.Marshal(longStruct, jsonOpts)
+	longStructJSON, err := json.Marshal(longStruct, jsonOpts)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	customMarshalled := NewDescriptiveStruct("descriptiveStruct", longValue)
-	customMarshalledJSON, err := jsonv2.Marshal(customMarshalled, jsonOpts)
+	customMarshalledJSON, err := json.Marshal(customMarshalled, jsonOpts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +61,7 @@ func TestReplaceAttrTruncateLong(t *testing.T) {
 		slog.Any("struct", longStruct),
 		slog.Any("slice", []any{"slice", longStruct}),
 		slog.Any("json.RawMessage", jsonv1.RawMessage(longStructJSON)),
-		slog.Any("jsontext.Value", jsonv2text.Value(longStructJSON)),
+		slog.Any("jsontext.Value", jsontext.Value(longStructJSON)),
 		slog.Any("descriptiveStruct", customMarshalled),
 		slog.Any("descriptiveStructs", []any{"de", customMarshalled}),
 		slog.Any("error", errors.New(longValue)),
@@ -75,7 +74,7 @@ func TestReplaceAttrTruncateLong(t *testing.T) {
 	// t.Log(buf.String())
 
 	var output simpleOutputTruncated
-	err = jsonv2.Unmarshal(buf.Bytes(), &output)
+	err = json.Unmarshal(buf.Bytes(), &output)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +174,7 @@ func TestReplaceAttrTruncateShort(t *testing.T) {
 	}
 
 	longStruct := ValueStruct{Value: longValue}
-	longStructJSON, err := jsonv2.Marshal(longStruct, jsonOpts)
+	longStructJSON, err := json.Marshal(longStruct, jsonOpts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +189,7 @@ func TestReplaceAttrTruncateShort(t *testing.T) {
 		slog.Any("struct", longStruct),
 		slog.Any("slice", []any{"slice", longStruct}),
 		slog.Any("json.RawMessage", jsonv1.RawMessage(longStructJSON)),
-		slog.Any("jsontext.Value", jsonv2text.Value(longStructJSON)),
+		slog.Any("jsontext.Value", jsontext.Value(longStructJSON)),
 		slog.Any("descriptiveStruct", customMarshalled),
 		slog.Any("descriptiveStructs", []any{"de", customMarshalled}),
 		slog.Any("error", errors.New(longValue)),
@@ -203,7 +202,7 @@ func TestReplaceAttrTruncateShort(t *testing.T) {
 	// t.Log(buf.String())
 
 	var output simpleOutputNonTruncated
-	err = jsonv2.Unmarshal(buf.Bytes(), &output)
+	err = json.Unmarshal(buf.Bytes(), &output)
 	if err != nil {
 		t.Fatal(err)
 	}
