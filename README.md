@@ -8,8 +8,9 @@
 [![Contributors](https://img.shields.io/github/contributors/veqryn/slog-json)](https://github.com/veqryn/slog-json/graphs/contributors)
 [![License](https://img.shields.io/github/license/veqryn/slog-json)](./LICENSE)
 
-Format your Golang structured logging (slog) using the [JSON v2](https://github.com/golang/go/discussions/63397)
-[library](https://github.com/go-json-experiment/json), with optional single-line pretty-printing.
+Format your Golang structured logging (slog) using the [JSON v2](https://go.dev/doc/go1.27#jsonv2)
+[library](https://pkg.go.dev/encoding/json/v2), with optional single-line pretty-printing.
+JSON V2 is now part of the Golang standard library!
 
 This is so much easier to read than the default json:
 ```text
@@ -21,7 +22,7 @@ or
 {"time": "2000-01-02T03:04:05Z", "level": "INFO", "msg": "m", "attr": {"nest": 1234}}
 ```
 
-Versus the default standard library JSON Handler:
+Versus the default v1 standard library JSON Handler:
 ```text
 {"time":"2000-01-02T03:04:05Z","level":"INFO","msg":"m","attr":{"nest":"1234"}}
 ```
@@ -37,7 +38,7 @@ Additional benefits:
 - [sloggrpc](https://github.com/veqryn/slog-context/tree/main/grpc): Instrument [GRPC](https://grpc.io/) with automatic logging of all requests and responses.
 - [slogdedup](https://github.com/veqryn/slog-dedup): Middleware that deduplicates and sorts attributes. Particularly useful for JSON logging. Format logs for aggregators (Graylog, GCP/Stackdriver, etc).
 - [slogbugsnag](https://github.com/veqryn/slog-bugsnag): Middleware that pipes Errors to [Bugsnag](https://www.bugsnag.com/).
-- [slogjson](https://github.com/veqryn/slog-json): Formatter that uses the [JSON v2](https://github.com/golang/go/discussions/63397) [library](https://github.com/go-json-experiment/json), with optional single-line pretty-printing.
+- [slogjson](https://github.com/veqryn/slog-json): Formatter that uses the [JSON v2](https://go.dev/doc/go1.27#jsonv2) [library](https://pkg.go.dev/encoding/json/v2), with optional single-line pretty-printing.
 
 
 ## Install
@@ -54,11 +55,11 @@ import (
 package main
 
 import (
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"log/slog"
 	"os"
 
-	"github.com/go-json-experiment/json"
-	"github.com/go-json-experiment/json/jsontext"
 	slogjson "github.com/veqryn/slog-json"
 )
 
@@ -80,10 +81,10 @@ func main() {
 	slog.SetDefault(slog.New(h))
 
 	slog.Info("hello world")
-	// {"time":"2024-03-18T03:27:20Z", "level":"INFO", "msg":"hello world"}
+	// {"time":"2026-09-01T18:31:16Z", "level":"INFO", "msg":"hello world"}
 
 	slog.Error("oh no!", slog.String("foo", "bar"), slog.Int("num", 98), slog.Any("custom", Nested{Nest: "my value"}))
-	// {"time":"2024-03-18T03:27:20Z", "level":"ERROR", "msg":"oh no!", "foo":"bar", "num":98, "custom":{"nest":"my value"}}
+	// {"time":"2026-09-01T18:31:16Z", "level":"ERROR", "msg":"oh no!", "foo":"bar", "num":98, "custom":{"nest":"my value"}}
 }
 
 type Nested struct {
@@ -96,12 +97,12 @@ type Nested struct {
 package main
 
 import (
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"log/slog"
 	"os"
 	"time"
 
-	"github.com/go-json-experiment/json"
-	"github.com/go-json-experiment/json/jsontext"
 	slogmulti "github.com/samber/slog-multi"
 	slogctx "github.com/veqryn/slog-context"
 	slogotel "github.com/veqryn/slog-context/otel"
