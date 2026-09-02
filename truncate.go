@@ -56,28 +56,15 @@ func ReplaceAttrTruncate(maxLogFieldLength int, jsonOptions json.Options) func(g
 				a = slog.Any(a.Key, jsontext.Value(sjson))
 			}
 
-			// Truncate really long raw json and []byte's
-			//if b, ok := a.Value.Any().(jsontext.Value); ok {
-			//	if len(b) > maxLogFieldLength {
-			//		return slog.Any(a.Key, replaced{
-			//			Replaced:  true,
-			//			Length:    len(b),
-			//			// Annoying to have it escaped and embedded, but can still be read if needed
-			//			Truncated: truncateByBytes(string(b), maxLogFieldLength),
-			//		})
-			//	}
-			//}
-			switch b := a.Value.Any().(type) {
-			// TODO: see if there is an existing way to truncate json while keeping it valid json
-			case jsontext.Value:
-				if len(b) > maxLogFieldLength {
-					return slog.Any(a.Key, replaced{
-						Replaced: true,
-						Length:   len(b),
-						// Annoying to have it escaped and embedded, but can still be read if needed
-						Truncated: truncateByBytes(string(b), maxLogFieldLength),
-					})
-				}
+			// Truncate really long raw json
+			if b, ok := a.Value.Any().(jsontext.Value); ok && len(b) > maxLogFieldLength {
+				// TODO: see if there is an existing way to truncate json while keeping it valid json
+				return slog.Any(a.Key, replaced{
+					Replaced: true,
+					Length:   len(b),
+					// Annoying to have it escaped and embedded, but can still be read if needed
+					Truncated: truncateByBytes(string(b), maxLogFieldLength),
+				})
 			}
 		}
 		return a
