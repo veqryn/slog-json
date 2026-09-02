@@ -1,13 +1,11 @@
 package slogjson
 
 import (
-	jsonv1 "encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"log/slog"
 	"unicode/utf8"
-
-	jsonv2 "github.com/go-json-experiment/json"
-	jsonv2text "github.com/go-json-experiment/json/jsontext"
 )
 
 // ReplaceAttrTruncate is a replacement function that examines attributes before
@@ -16,7 +14,7 @@ import (
 // field, docker is 16kb, some Java based systems have a max of 8221.
 // Since there can be multiple fields, and it is a lot harder to control total length, set the field
 // length a bit shorter.
-func ReplaceAttrTruncate(maxLogFieldLength int, jsonOptions jsonv2.Options) func(group []string, a slog.Attr) slog.Attr {
+func ReplaceAttrTruncate(maxLogFieldLength int, jsonOptions json.Options) func(group []string, a slog.Attr) slog.Attr {
 	// Add a default marshaler for all `error` types
 	jsonOptions = appendErrorMarshaler(jsonOptions)
 
@@ -53,28 +51,30 @@ func ReplaceAttrTruncate(maxLogFieldLength int, jsonOptions jsonv2.Options) func
 			// In order to accomplish the above in the most flexible manner, we will pre-marshal the
 			// value into a RawMessage([]byte), using the same marshaller options our slog handler
 			// is using, then truncate if necessary.
-			sjson, err := jsonv2.Marshal(value, jsonOptions)
+			sjson, err := json.Marshal(value, jsonOptions)
 			if err == nil {
-				a = slog.Any(a.Key, jsonv1.RawMessage(sjson))
+				a = slog.Any(a.Key, jsontext.Value(sjson))
 			}
 
 			// Truncate really long raw json and []byte's
+			//if b, ok := a.Value.Any().(jsontext.Value); ok {
+			//	if len(b) > maxLogFieldLength {
+			//		return slog.Any(a.Key, replaced{
+			//			Replaced:  true,
+			//			Length:    len(b),
+			//			// Annoying to have it escaped and embedded, but can still be read if needed
+			//			Truncated: truncateByBytes(string(b), maxLogFieldLength),
+			//		})
+			//	}
+			//}
 			switch b := a.Value.Any().(type) {
 			// TODO: see if there is an existing way to truncate json while keeping it valid json
-			case jsonv1.RawMessage:
+			case jsontext.Value:
 				if len(b) > maxLogFieldLength {
 					return slog.Any(a.Key, replaced{
 						Replaced: true,
 						Length:   len(b),
 						// Annoying to have it escaped and embedded, but can still be read if needed
-						Truncated: truncateByBytes(string(b), maxLogFieldLength),
-					})
-				}
-			case jsonv2text.Value:
-				if len(b) > maxLogFieldLength {
-					return slog.Any(a.Key, replaced{
-						Replaced:  true,
-						Length:    len(b),
 						Truncated: truncateByBytes(string(b), maxLogFieldLength),
 					})
 				}

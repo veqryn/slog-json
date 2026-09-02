@@ -3,6 +3,8 @@ package slogjson
 import (
 	"bytes"
 	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -15,8 +17,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/go-json-experiment/json"
-	"github.com/go-json-experiment/json/jsontext"
 	"github.com/veqryn/slog-json/internal/buffer"
 )
 
